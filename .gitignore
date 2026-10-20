@@ -1,0 +1,14 @@
+# Local environment
+.venv/
+__pycache__/
+*.pyc
+.DS_Store
+
+# Run logs
+logs/
+
+# Collected data and generated reports live in the private city-pulse-data repo
+# (tracked from this same folder via .git-data — see README)
+data/
+reports/
+.git-data/
