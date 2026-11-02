@@ -12,6 +12,11 @@ Outputs per city to data/<city>/:
     events_YYYY-WXX.csv   — this week's feed snapshot
     events_all.csv        — every event seen, one row per event (latest details,
                             first and last week it appeared in the feed)
+
+For events whose address is hidden until approval, venue_hint keeps what the
+host says publicly about the place ("a loft in SoHo"), and described_type comes
+from data/event_venues.csv, filled in by hand from those hints. Addresses are
+never looked up elsewhere: hosts hide them on purpose.
 """
 
 import argparse
@@ -45,6 +50,11 @@ BERLIN_AREAS = {
     "Lichtenberg": "10365 10367 10369",
 }
 BERLIN_AREAS = {pc: a for a, pcs in BERLIN_AREAS.items() for pc in pcs.split()}
+# Words that describe a place, for hints from hidden-address events' own text.
+VENUE_WORDS = re.compile(
+    r"\b(venue|loft|studio|rooftop|offices?|hq|headquarters|campus|gallery|galerie|caf[eé]|bar|restaurant|"
+    r"private home|our home|apartment|warehouse|refinery|garden|hotel|space in|coworking|library|museum)\b", re.I)
+EVENT_VENUES = Path("data") / "event_venues.csv"  # uid → described_type, filled in by hand
 LOWER_MANHATTAN = {10002, 10003, 10004, 10005, 10006, 10007, 10009, 10012, 10013, 10014, 10038, 10280, 10282}
 
 
@@ -122,6 +132,28 @@ def venue_type(city: str, location: str, venue: str, known: dict) -> str:
     return UNKNOWN_VENUE
 
 
+def venue_hint(title: str, description: str) -> str:
+    """Up to two snippets where the host's own public text describes the venue."""
+    body = "\n".join(l for l in description.split("\n")
+                     if not l.startswith(("Get up-to-date information", "Hosted by")))
+    text = re.sub(r"\s+", " ", f"{title}. {body}")
+    snippets, last_end = [], -1
+    for m in VENUE_WORDS.finditer(text):
+        start, end = max(0, m.start() - 60), m.end() + 60
+        if start < last_end:  # overlaps the previous snippet
+            continue
+        snippets.append(text[start:end].strip())
+        last_end = end
+    return " … ".join(snippets[:2])
+
+
+def load_event_venues() -> dict:
+    if not EVENT_VENUES.exists():
+        return {}
+    df = pd.read_csv(EVENT_VENUES).dropna(subset=["described_type"])
+    return dict(zip(df["uid"], df["described_type"]))
+
+
 def area(city: str, location: str) -> str:
     if city == "berlin":
         m = re.search(r"\b(1[0-4]\d{3})\b", location)
@@ -153,6 +185,11 @@ def tag(df: pd.DataFrame, city: str) -> pd.DataFrame:
     df["tech"] = df["topics"].map(lambda ts: bool(set(ts.split(";")) & TECH_TOPICS))
     df["venue"] = df["location"].map(venue_name)
     df["venue_type"] = [venue_type(city, l, v, known) for l, v in zip(df["location"], df["venue"])]
+    hidden = df["venue_type"] == HIDDEN_VENUE
+    df["venue_hint"] = ""
+    df.loc[hidden, "venue_hint"] = [venue_hint(a, b) for a, b in zip(df.loc[hidden, "title"], df.loc[hidden, "description"])]
+    described = load_event_venues()
+    df["described_type"] = [described.get(u, "") if h else "" for u, h in zip(df["uid"], hidden)]
     df["area"] = df["location"].map(lambda l: area(city, l))
     local = df["start"].dt.tz_convert(tz)
     df["slot"] = local.map(slot)

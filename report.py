@@ -689,8 +689,8 @@ def load_events(city_key: str) -> pd.DataFrame:
         return pd.DataFrame()
     df = pd.read_csv(p)
     df["topics"] = df["topics"].fillna("")
-    for col in ["venue", "area", "organizer", "location"]:
-        df[col] = df[col].fillna("")
+    for col in ["venue", "area", "organizer", "location", "venue_hint", "described_type"]:
+        df[col] = df[col].fillna("") if col in df else ""
     return df
 
 
@@ -741,6 +741,31 @@ def section_events(week: str, caveats: list) -> str:
     hdr = ["Venue type"] + [f"{name[k]} tech" for k in ev] + [f"{name[k]} other" for k in ev]
     out.append('<p class="sub">Compared with all other events (culture, food, social…):</p>'
                + table(hdr, [[esc(x)] + [f"{vt[k].get(x, 0):.0f}%" for k in ev] + [f"{vo[k].get(x, 0):.0f}%" for k in ev] for x in types]))
+
+    # Hidden addresses: what hosts say about the place themselves
+    rows, todo = [], []
+    for k in ev:
+        h = tech[k][tech[k]["venue_type"] == HIDDEN_VENUE]
+        if h.empty:
+            continue
+        typed = h[h["described_type"] != ""]
+        pending = h[(h["described_type"] == "") & (h["venue_hint"] != "")]
+        silent = len(h) - len(typed) - len(pending)
+        rows.append([f"<b>{esc(name[k])}</b>", str(len(h)),
+                     chips([f"{x} ({n})" for x, n in typed["described_type"].value_counts().items()], 8),
+                     str(len(pending)), str(silent)])
+        todo += [[esc(name[k]), esc(r.title[:70]), f'<span class="muted">{esc(r.venue_hint)}</span>', f"<code>{esc(r.uid)}</code>"]
+                 for r in pending.itertuples()]
+    if rows:
+        out.append('<h3>Hidden addresses: what hosts say about the place</h3>'
+                   '<p class="sub">From the host\'s own public title and description only; addresses are never looked up '
+                   'elsewhere. Types are confirmed by hand in <code>data/event_venues.csv</code>.</p>'
+                   + table(["City", "Hidden tech events", "Described as", "Described, type not set yet", "Not described"], rows))
+    if todo:
+        out.append('<details class="tv"><summary>Hidden-address events that describe their venue, awaiting a type '
+                   f'({len(todo)})</summary>' + table(["City", "Event", "What the host says", "uid"], todo, "examples") + '</details>')
+        caveats.append(f"Events: {len(todo)} hidden-address events describe their venue but have no type yet; add them to "
+                       "data/event_venues.csv (uid, city, title, described_type), using the venue types from venues.csv.")
 
     # Topics
     top = {k: {tp: 100 * tech[k]["topics"].str.contains(re.escape(tp)).mean() for tp in EVENT_TOPICS} if len(tech[k]) else {} for k in ev}

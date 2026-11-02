@@ -179,6 +179,11 @@ into this folder.
   day. "Address hidden" = the venue is only shown after the host approves the registration. The
   report lists venues without a type; add them to `venues.csv` (by venue name, or street address
   when unnamed). `events_all.csv` keeps one row per event with the weeks it was first/last seen.
+- **Hidden addresses**: when a host hides the address until approval, it stays "Address hidden"
+  (that gating is itself a signal), and is never looked up elsewhere. If the host's own title or
+  description describes the place ("a loft in SoHo", "Venue: The Delta Campus"), the snippet is kept
+  as `venue_hint` and the report lists it; confirm a type by hand in `data/event_venues.csv`
+  (uid, city, title, described_type; per-event, so it lives in the private data repo).
 - **Rising searches**: per domain, Trends' "rising" searches for a whole category in the region
   (`RISING_CATEGORIES` in `config.py`, last 3 months). Our own seed terms are too small for
   Trends to return rising searches. Categories include unrelated sports/TV/celebrity searches.
