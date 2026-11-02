@@ -17,6 +17,8 @@ city-pulse/
 ├── collect_berlin.py       # thin entry point for Berlin
 ├── collect_newyork.py      # thin entry point for New York
 ├── collect_paris.py        # thin entry point for Paris
+├── events.py               # Luma events — topics, venue types, areas
+├── venues.csv              # known venues → venue type (add new ones here)
 ├── analyze.py              # trend scoring + report generation
 ├── data/
 │   ├── berlin/             # berlin CSVs (trends, autocomplete, cumulative)
@@ -95,7 +97,8 @@ Monday catch-up run get the same label.
 ```
 
 Writes `reports/weekly_report_<week>.html`: overview with normal-churn context, new/gone per
-domain, Berlin English vs German, auto-flagged tidbits, anchored Trends charts and caveats.
+domain, Berlin English vs German, auto-flagged tidbits, anchored Trends charts, rising searches,
+AI & builder terms, Luma events and caveats.
 Generated automatically by `run_weekly.sh` after the Sunday collection.
 
 ### Step 4: Analyze
@@ -166,6 +169,16 @@ into this folder.
   batched with big ones and rounded to 0.
 - **Autocomplete rank**: from 2026-W45 each suggestion's position in the dropdown (1–10) is
   stored in `rank`; the report flags suggestions that climb 3+ places.
+- **AI & builder terms** (`builder` domain in `SEED_TEMPLATES`, from 2026-W45): tech / AI concepts
+  without the city name (Trends is already limited to the region). Reported in their own section,
+  so they don't distort the week-over-week comparisons of the original five domains.
+- **Luma events** (`events.py`, from 2026-W45): each city's Luma Discover iCal feed — the official
+  "Add iCal Subscription" feed of upcoming approved events, a featured slice of ~50 events (~4 weeks
+  ahead in Berlin, ~1 week in New York, so compare shares, not counts). Events are tagged with topics
+  (`EVENT_TOPICS`), venue type (`venues.csv`, then keyword rules in `VENUE_TYPES`), area and time of
+  day. "Address hidden" = the venue is only shown after the host approves the registration. The
+  report lists venues without a type; add them to `venues.csv` (by venue name, or street address
+  when unnamed). `events_all.csv` keeps one row per event with the weeks it was first/last seen.
 - **Rising searches**: per domain, Trends' "rising" searches for a whole category in the region
   (`RISING_CATEGORIES` in `config.py`, last 3 months). Our own seed terms are too small for
   Trends to return rising searches. Categories include unrelated sports/TV/celebrity searches.

@@ -11,6 +11,11 @@ for city in berlin newyork; do
     echo "exit code: $?" >> "logs/weekly_${stamp}.log"
 done
 
+# Luma events (both cities) → data/<city>/events_*.csv
+echo "=== $(date) — events ===" >> "logs/weekly_${stamp}.log"
+.venv/bin/python -W ignore -u events.py >> "logs/weekly_${stamp}.log" 2>&1
+echo "exit code: $?" >> "logs/weekly_${stamp}.log"
+
 # Weekly HTML report → reports/weekly_report_<week>.html
 echo "=== $(date) — report ===" >> "logs/weekly_${stamp}.log"
 .venv/bin/python -W ignore -u report.py >> "logs/weekly_${stamp}.log" 2>&1

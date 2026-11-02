@@ -299,6 +299,27 @@ SEED_TEMPLATES = {
             "voyages en train depuis {city}",
         ],
     },
+
+    # Tech / AI concepts builders search, without the city: Trends is already
+    # limited to the region, and the city name would cut volume to zero. All
+    # registered in both DE-BE and US-NY (tested 2026-W45) except AI safety,
+    # world model, quantum computing and humanoid robot, which are near zero in
+    # Berlin and kept for that contrast. "RAG" left out: mostly unrelated searches.
+    # Autocomplete runs these per country (DE / US), not per city. Added 2026-W45.
+    "builder": {
+        "en": [
+            "Claude Code",
+            "AI agent",
+            "agentic AI",
+            "MCP server",
+            "vibe coding",
+            "EU AI Act",
+            "AI safety",
+            "world model",
+            "quantum computing",
+            "humanoid robot",
+        ],
+    },
 }
 
 # ── Per-city seed overrides ───────────────────────────────────────────────────
@@ -320,6 +341,54 @@ SEED_OVERRIDES = {
         "startup {city}":          "startup {city} City",         # was: Giants QB, Knicks
     },
 }
+
+# ── Luma events ───────────────────────────────────────────────────────────────
+# Each city's Luma Discover page offers an official iCal subscription of
+# upcoming approved events ("Add iCal Subscription"; help.luma.com/p/ical-syncing).
+# It's a featured slice capped at ~50 events: ~4 weeks ahead in Berlin, ~1 week
+# in New York. Added 2026-W45.
+
+LUMA_FEEDS = {
+    "berlin":   "discplace-gCfX0s3E9Hgo3rG",   # luma.com/berlin
+    "new_york": "discplace-Izx1rQVSh8njYpP",   # luma.com/nyc
+}
+
+# Topic tags from title + start of description (an event can have several).
+EVENT_TOPICS = {
+    "AI agents":             r"\bagent(s|ic)?\b|\bmcp\b|claude code|codex|harness",
+    "AI / LLMs":             r"\bai\b|\bllms?\b|\bgpt\b|genai|\bki\b|machine learning|artificial intelligence|openai|anthropic|claude|gemini",
+    "Builders & hackathons": r"vibe cod|hackathon|\bhack\b|builders?\b|demo ?(day|night)|\bdemos\b|demo or it|show & tell|show and tell|hack night",
+    "Founders & investors":  r"founder|startup|start-up|gründer|\bvcs?\b|investor|angel|pitch|fundrais|pre-seed|accelerator|incubator|unicorn",
+    "Robotics & hardware":   r"robot|hardware|physical ai|drone|deep ?tech|semiconductor|\bcompute\b",
+    "Science & research":    r"science|research|\bphd\b|scientist",
+    "Health & bio":          r"health ?tech|biotech|\bbio\b|medtech|pharma",
+    "Climate & energy":      r"climate|energy|cleantech|carbon",
+    "Crypto / web3":         r"crypto|web3|blockchain|solana|ethereum|bitcoin|defi",
+    "AI safety & policy":    r"ai safety|alignment|ai act|ai policy|ai governance|ai ethics|security",
+    "Fintech":               r"fintech|payments",
+}
+# An event counts as tech / startup if it has any of these
+TECH_TOPICS = {"AI agents", "AI / LLMs", "Builders & hackathons", "Founders & investors",
+               "Robotics & hardware", "Crypto / web3", "AI safety & policy", "Fintech"}
+
+# Venue types. venues.csv maps known venues (by name) to a type and wins over
+# these keyword rules; the report lists venues neither of them recognises, so
+# they can be added there. Rules are tried in order; first match wins.
+VENUE_TYPES = [
+    ("Online",                          r"\bonline\b|zoom\.us|meet\.google|youtube\.com|livestream"),
+    ("Coworking space",                 r"coworking|co-working|betahaus|wework|mindspace|spaces\b|factory berlin"),
+    ("Startup / innovation campus",     r"campus|innovation (center|centre|hub)|\bhub\b|incubator|accelerator|motionlab"),
+    ("University / research institute", r"universit|hochschule|\btu\b|college|institut|fraunhofer|max planck|helmholtz|cornell tech|columbia|\bnyu\b"),
+    ("Investor / law / professional firm", r"\bllp\b|ventures|capital|partners\b|rechtsanw|law firm|speedinvest"),
+    ("Community / civic space",         r"civic|community (center|centre)|nachbarschaft|bürgerhaus|public library|innovation agency"),
+    ("Cultural venue",                  r"galler|galerie|museum|bibliothek|library|theat|kino|cinema|kunst|\bart\b|kulturhaus|cultural|opera|oper\b"),
+    ("Bar / café / restaurant / club",  r"caf[eé]|coffee|kaffee|\bbar\b|wine|wein|brewery|bräu|ales\b|restaurant|kitchen|bistro|club\b|pub\b|kneipe|teahouse|teeraum"),
+    ("Event venue / hotel",             r"hotel|event ?(space|venue|location)|eventlocation|\bpier\b|loft|ballroom|conference"),
+    ("Outdoors / sports",               r"\bpark\b|garten|garden|padel|pickleball|stadium|sportplatz|running|gym\b"),
+    ("Tech company office",             r"\bgmbh\b|\bag\b|\bse\b|\binc\b|\bllc\b|\bltd\b|offices?\b|hq\b"),
+]
+HIDDEN_VENUE = "Address hidden until approved"
+UNKNOWN_VENUE = "Unclassified"
 
 
 def get_seeds(city_key: str) -> dict:

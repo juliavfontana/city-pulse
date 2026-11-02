@@ -2,8 +2,8 @@
 City Cultural Pulse — weekly HTML report
 Builds a single self-contained HTML page comparing Berlin and New York:
 overview + normal churn, new/gone per domain, Berlin English vs German,
-auto-flagged tidbits, anchored Trends charts, Google's rising searches, and
-data caveats.
+auto-flagged tidbits, anchored Trends charts, Google's rising searches, AI &
+builder terms, Luma events (topics, venue types, areas), and data caveats.
 
 Usage:
     python3 report.py                 # latest collected week
@@ -21,11 +21,13 @@ from pathlib import Path
 import pandas as pd
 
 from analyze import load_trends
-from config import CITIES, SEED_OVERRIDES, RISING_CATEGORIES
+from config import CITIES, SEED_OVERRIDES, RISING_CATEGORIES, TECH_TOPICS, EVENT_TOPICS, HIDDEN_VENUE, UNKNOWN_VENUE
 
 REPORTS_DIR = Path("reports")
 CITY_KEYS = ["berlin", "new_york"]
-DOMAINS = ["tech", "culture", "fashion", "food", "travel"]
+DOMAINS = ["tech", "culture", "fashion", "food", "travel"]  # the original domains, compared since June
+BUILDER = "builder"  # AI / builder terms, from 2026-W45, reported in their own section
+SERIES = [("berlin", "Berlin", "c-berlin"), ("new_york", "New York", "c-ny")]
 JUNE = ["2026-W23", "2026-W24", "2026-W25"]
 LANG_NAMES = {"en": "English", "de": "German"}
 
@@ -103,7 +105,8 @@ class CityWeeks:
     def __init__(self, city_key: str, week: str):
         self.key = city_key
         self.name = CITIES[city_key]["display_name"]
-        self.df = load_autocomplete(city_key)
+        df = load_autocomplete(city_key)
+        self.df = df[df["domain"].isin(DOMAINS)]
         self.weeks = sorted(w for w in self.df["week"].unique() if w <= week)
         self.week = week
         self.prev = self.weeks[-2] if len(self.weeks) > 1 else None
@@ -282,6 +285,30 @@ def grouped_bars(groups: list, series: list) -> str:
                 out.append(f'<text x="{x + bw/2:.1f}" y="{yb - h - 5:.1f}" class="value small" text-anchor="middle">{v:.0f}</text>')
         out.append(f'<text x="{40 + gi * gw + gw/2:.1f}" y="{H - 10}" class="tick" text-anchor="middle">{esc(g["label"])}</text>')
     out.append(f'<line x1="36" x2="{W}" y1="{H - PB}" y2="{H - PB}" class="axis"/></svg>')
+    return "".join(out)
+
+
+def paired_hbars(rows: list, series: list, unit: str = "%", label_w: int = 250) -> str:
+    """rows: [{label, values: {series_key: value}}] — one thin bar per series under each label."""
+    W, BH, GAP = 680, 10, 3
+    RH = len(series) * (BH + GAP) + 12
+    mx = max([v for r in rows for v in r["values"].values()] + [1e-9])
+    sx = lambda v: (W - label_w - 60) * v / mx
+    h = len(rows) * RH + 6
+    out = [f'<svg viewBox="0 0 {W} {h}" class="chart" role="img">']
+    for i, r in enumerate(rows):
+        y0 = i * RH + 4
+        out.append(f'<text x="{label_w - 10}" y="{y0 + BH + 2}" class="label" text-anchor="end">{esc(r["label"])}</text>')
+        for si, (key, name, cls) in enumerate(series):
+            v = r["values"].get(key, 0)
+            y = y0 + si * (BH + GAP)
+            if v:
+                w = max(sx(v), 3)
+                tip = esc(f"{name} · {r['label']}: {v:.0f}{unit}")
+                out.append(f'<rect x="{label_w}" y="{y}" width="{w:.1f}" height="{BH}" rx="2" class="{cls} hit" '
+                           f'data-tip="{tip}" tabindex="0"/>')
+                out.append(f'<text x="{label_w + w + 5:.1f}" y="{y + BH - 1}" class="value small">{v:.0f}{unit}</text>')
+    out.append(f'<line x1="{label_w}" x2="{label_w}" y1="0" y2="{h}" class="axis"/></svg>')
     return "".join(out)
 
 
@@ -515,6 +542,7 @@ def section_trends(caveats: list) -> str:
         p = Path("data") / k / "trends_all.csv"
         if p.exists():
             df = load_trends(p)
+            df = df[df["domain"].isin(DOMAINS)] if not df.empty else df
             if not df.empty:
                 loaded[k] = df
     anchors = {a for df in loaded.values() for a in df["anchor"].unique()}
@@ -595,6 +623,170 @@ def section_trends(caveats: list) -> str:
             + table_view(["Domain", "Berlin", "New York"],
                          [[g["label"], f'{g["values"].get("berlin", 0):.1f}', f'{g["values"].get("new_york", 0):.1f}'] for g in groups])
             + "</section>")
+
+
+def section_builder(week: str) -> str:
+    """AI / builder terms: Trends level and change per city, plus what autocomplete attaches to them."""
+    head = ('<section id="builder"><h2>AI &amp; builder terms</h2>'
+            '<p class="sub">Tech and AI concepts people building things search for, without the city name. '
+            'Trends is limited to each region (Berlin state, New York state); autocomplete only works per country (Germany, US).</p>')
+    body = []
+
+    # Trends: last 4 complete weeks vs the 8 before, relative to the anchor
+    rows = {}
+    for k, name, _ in SERIES:
+        p = Path("data") / k / "trends_all.csv"
+        df = load_trends(p) if p.exists() else pd.DataFrame()
+        df = df[df["domain"] == BUILDER] if not df.empty else df
+        if df.empty:
+            continue
+        dates = sorted(df["date"].unique())
+        if len(dates) < 14:
+            continue
+        recent_d, base_d = dates[-5:-1], dates[-13:-5]
+        for q, g in df.groupby("query"):
+            by_date = g.groupby("date")["relative_interest"].mean()
+            recent, base = by_date.reindex(recent_d).mean(), by_date.reindex(base_d).mean()
+            rows.setdefault(q, {})[k] = (recent, 100 * (recent / base - 1) if base and base >= 1 else None)
+    if rows:
+        order = sorted(rows, key=lambda q: -max(v[0] for v in rows[q].values()))
+        bars = [{"label": q, "values": {k: rows[q][k][0] for k in rows[q] if pd.notna(rows[q][k][0])}} for q in order]
+        fmt_c = lambda c: "–" if c is None or pd.isna(c) else f"{c:+.0f}%"
+        tv = [[q] + [f"{rows[q][k][0]:.1f}" if k in rows[q] else "–" for k, _, _ in SERIES]
+                  + [fmt_c(rows[q][k][1]) if k in rows[q] else "–" for k, _, _ in SERIES] for q in order]
+        body.append('<h3>Search interest per term, relative to the anchor (last 4 complete weeks)</h3>'
+                    '<p class="sub">100 = searched as much as the anchor term in that region. Change = vs the 8 weeks before.</p>'
+                    + legend(SERIES) + paired_hbars(bars, SERIES, unit="")
+                    + table(["Term", "Berlin", "New York", "Berlin change", "New York change"], [[esc(c) for c in r] for r in tv]))
+
+    # Autocomplete: what people attach to each term this week
+    ac_rows = []
+    for k, name, _ in SERIES:
+        df = load_autocomplete(k)
+        df = df[(df["domain"] == BUILDER) & (df["hl"] == "en")]
+        if df.empty or week not in set(df["week"]):
+            continue
+        earlier = sorted(w for w in df["week"].unique() if w < week)
+        prev = df[df["week"] == earlier[-1]] if earlier else df.iloc[0:0]
+        cur = df[df["week"] == week]
+        for seed, g in cur.groupby("seed", sort=False):
+            seen = set(prev[prev["seed"] == seed]["s"])
+            items = [("★ " if seen and s not in seen else "") + s for s in g.sort_values("rank")["s"]] if "rank" in g else list(g["s"])
+            ac_rows.append([esc("Germany" if k == "berlin" else "US"), esc(seed), chips(items, 10)])
+    if ac_rows:
+        body.append('<h3>What autocomplete attaches to each term</h3>'
+                    '<p class="sub">English results, in dropdown order. ★ = not suggested for this term last week.</p>'
+                    + table(["Country", "Term", "Suggestions"], ac_rows, "examples"))
+
+    if not body:
+        return head + '<p class="badge warn">No AI &amp; builder data for this week (collected from 2026-W45).</p></section>'
+    return head + "".join(body) + "</section>"
+
+
+def load_events(city_key: str) -> pd.DataFrame:
+    p = Path("data") / city_key / "events_all.csv"
+    if not p.exists():
+        return pd.DataFrame()
+    df = pd.read_csv(p)
+    df["topics"] = df["topics"].fillna("")
+    for col in ["venue", "area", "organizer", "location"]:
+        df[col] = df[col].fillna("")
+    return df
+
+
+def shares(df: pd.DataFrame, col: str) -> dict:
+    return (100 * df[col].value_counts() / len(df)).to_dict() if len(df) else {}
+
+
+def section_events(week: str, caveats: list) -> str:
+    head = ('<section id="events"><h2>Events on Luma</h2>'
+            '<p class="sub">Each city\'s Luma Discover feed (official iCal subscription), collected weekly. It is Luma\'s featured slice '
+            '(about 50 upcoming events): it reaches about 4 weeks ahead in Berlin but only about a week in New York, so compare '
+            'shares, not counts. Covers events that entered the feed in the last 4 collected weeks. Tech / startup = '
+            'tagged with any of: ' + esc(", ".join(sorted(TECH_TOPICS))) + '.</p>')
+    ev = {}
+    for k, _, _ in SERIES:
+        df = load_events(k)
+        if df.empty:
+            continue
+        weeks = sorted(w for w in df["first_seen"].unique() if w <= week)[-4:]
+        df = df[df["first_seen"].isin(weeks)]
+        if not df.empty:
+            ev[k] = (df, weeks)
+    if not ev:
+        return head + '<p class="badge warn">No events collected yet (from 2026-W45).</p></section>'
+
+    name = {k: n for k, n, _ in SERIES}
+    tiles, out = [], []
+    for k, (df, weeks) in ev.items():
+        t = df[df["tech"]]
+        hidden = (t["venue_type"] == HIDDEN_VENUE).mean() * 100 if len(t) else 0
+        tiles.append(f'<div class="tile"><div class="tl">{esc(name[k])}</div><div class="tv-big">{len(df)}</div>'
+                     f'<div class="ts">events ({esc(weeks[0])}–{esc(weeks[-1])})</div>'
+                     f'<div class="tn"><b>{pct(len(t), len(df))}</b> tech / startup<br>'
+                     f'<b>{hidden:.0f}%</b> of those with the address hidden until approved</div></div>')
+    out.append(f'<div class="tiles">{"".join(tiles)}</div>')
+
+    tech = {k: df[df["tech"]] for k, (df, _) in ev.items()}
+    other = {k: df[~df["tech"]] for k, (df, _) in ev.items()}
+
+    # Venue types
+    vt = {k: shares(tech[k], "venue_type") for k in ev}
+    vo = {k: shares(other[k], "venue_type") for k in ev}
+    types = sorted(set().union(*vt.values(), *vo.values()), key=lambda x: -sum(vt[k].get(x, 0) for k in ev))
+    out.append('<h3>Where tech &amp; startup events happen</h3>'
+               '<p class="sub">Share of tech / startup events by venue type. "Address hidden" = the host shows the venue only '
+               'after approving your registration (private homes, offices, curated guest lists).</p>'
+               + legend(SERIES) + paired_hbars([{"label": x, "values": {k: vt[k].get(x, 0) for k in ev}} for x in types if any(vt[k].get(x) for k in ev)], SERIES))
+    hdr = ["Venue type"] + [f"{name[k]} tech" for k in ev] + [f"{name[k]} other" for k in ev]
+    out.append('<p class="sub">Compared with all other events (culture, food, social…):</p>'
+               + table(hdr, [[esc(x)] + [f"{vt[k].get(x, 0):.0f}%" for k in ev] + [f"{vo[k].get(x, 0):.0f}%" for k in ev] for x in types]))
+
+    # Topics
+    top = {k: {tp: 100 * tech[k]["topics"].str.contains(re.escape(tp)).mean() for tp in EVENT_TOPICS} if len(tech[k]) else {} for k in ev}
+    topics = sorted([tp for tp in EVENT_TOPICS if any(top[k].get(tp) for k in ev)], key=lambda tp: -sum(top[k].get(tp, 0) for k in ev))
+    out.append('<h3>What tech &amp; startup events are about</h3>'
+               '<p class="sub">Share of tech / startup events with each topic (an event can have several).</p>'
+               + legend(SERIES) + paired_hbars([{"label": tp, "values": {k: top[k].get(tp, 0) for k in ev}} for tp in topics], SERIES))
+
+    # Areas and time of day
+    rows = []
+    for k in ev:
+        a_t = tech[k][tech[k]["area"] != ""]["area"].value_counts()
+        a_o = other[k][other[k]["area"] != ""]["area"].value_counts()
+        rows.append([f"<b>{esc(name[k])}</b>", chips([f"{a} ({n})" for a, n in a_t.items()], 8),
+                     chips([f"{a} ({n})" for a, n in a_o.items()], 8)])
+    out.append('<h3>Neighbourhoods</h3><p class="sub">Events with a known address. Berlin areas are approximate (from postcodes).</p>'
+               + table(["City", "Tech / startup events", "Other events"], rows, "examples"))
+    sl = {k: shares(tech[k], "slot") for k in ev}
+    so = {k: shares(other[k], "slot") for k in ev}
+    out.append('<h3>Time of day</h3>' + table(["Start"] + hdr[1:],
+               [[s] + [f"{sl[k].get(s, 0):.0f}%" for k in ev] + [f"{so[k].get(s, 0):.0f}%" for k in ev]
+                for s in ["Morning", "Afternoon", "Evening"]]))
+
+    # Recurring venues and new hosts
+    rows = []
+    for k, (df, weeks) in ev.items():
+        t = tech[k]
+        place = t["venue"].where(t["venue"] != "", t["location"].str.split(",").str[0])
+        place = place[~t["venue_type"].isin([HIDDEN_VENUE, "Online"])]
+        rec = place.value_counts()
+        full = load_events(k)
+        before = set(full[full["first_seen"] < week]["organizer"])
+        new_hosts = sorted(set(t[(t["first_seen"] == week) & (t["organizer"] != "")]["organizer"]) - before)
+        rows.append([f"<b>{esc(name[k])}</b>", chips([f"{v} ({n})" for v, n in rec[rec >= 2].items()], 10),
+                     chips(new_hosts, 12) if len(full["first_seen"].unique()) > 1 else '<span class="muted">from next week</span>'])
+    out.append('<h3>Recurring venues and new hosts</h3>'
+               '<p class="sub">Venues with 2+ tech / startup events in the period; hosts of tech / startup events seen for the first time this week.</p>'
+               + table(["City", "Recurring venues", "New hosts this week"], rows, "examples"))
+
+    for k, (df, _) in ev.items():
+        unk = sorted(set(df.loc[df["venue_type"] == UNKNOWN_VENUE, "location"].str.split(",").str[0]))
+        if unk:
+            caveats.append(f"{name[k]} events: {len(unk)} venues have no venue type yet (add them to venues.csv): "
+                           + ", ".join(f'"{u}"' for u in unk[:10]) + ("…" if len(unk) > 10 else "") + ".")
+    caveats.append("Events: topics and tech / startup tagging come from keywords in titles and descriptions, so expect a few misfiles.")
+    return head + "".join(out) + "</section>"
 
 
 def load_rising(city_key: str) -> pd.DataFrame:
@@ -731,6 +923,8 @@ def build(week: str) -> str:
         section_tidbits(cities),
         section_trends(caveats),
         section_rising(week, caveats),
+        section_builder(week),
+        section_events(week, caveats),
     ]
     noise_caveats(cities, caveats)
     body.append('<section id="caveats"><h2>Caveats</h2><ul class="caveats">'
@@ -738,7 +932,8 @@ def build(week: str) -> str:
     generated = datetime.now(timezone.utc).astimezone().strftime("%Y-%m-%d %H:%M")
     nav = "".join(f'<a href="#{i}">{t}</a>' for i, t in [
         ("overview", "Overview"), ("new-gone", "New &amp; gone"), ("languages", "Berlin EN vs DE"),
-        ("tidbits", "Tidbits"), ("trends", "Trends"), ("rising", "Rising searches"), ("caveats", "Caveats")])
+        ("tidbits", "Tidbits"), ("trends", "Trends"), ("rising", "Rising searches"), ("builder", "AI &amp; builder terms"),
+        ("events", "Events"), ("caveats", "Caveats")])
     return (f'<!doctype html><html lang="en"><head><meta charset="utf-8">'
             f'<meta name="viewport" content="width=device-width,initial-scale=1">'
             f'<title>City Pulse {esc(week)}</title><style>{CSS}</style></head><body><main>'
