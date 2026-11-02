@@ -2,7 +2,8 @@
 City Cultural Pulse — weekly HTML report
 Builds a single self-contained HTML page comparing Berlin and New York:
 overview + normal churn, new/gone per domain, Berlin English vs German,
-auto-flagged tidbits, anchored Trends charts, and data caveats.
+auto-flagged tidbits, anchored Trends charts, Google's rising searches, and
+data caveats.
 
 Usage:
     python3 report.py                 # latest collected week
@@ -20,7 +21,7 @@ from pathlib import Path
 import pandas as pd
 
 from analyze import load_trends
-from config import CITIES, SEED_OVERRIDES
+from config import CITIES, SEED_OVERRIDES, RISING_CATEGORIES
 
 REPORTS_DIR = Path("reports")
 CITY_KEYS = ["berlin", "new_york"]
@@ -59,7 +60,9 @@ def esc(s) -> str:
 
 
 def week_date(week: str) -> datetime:
-    return datetime.strptime(week + "-1", "%Y-W%W-%w")
+    # Read as ISO weeks (current labels, see collect.current_week); older %W labels
+    # shift by the same amount within 2026, so gaps between them stay right.
+    return datetime.strptime(week + "-1", "%G-W%V-%u")
 
 
 def weeks_between(a: str, b: str) -> int:
@@ -464,6 +467,23 @@ def section_tidbits(cities: dict) -> str:
     if stable_html:
         items.append(f'<div class="tb"><h3>Stable for weeks, then vanished</h3>{"".join(stable_html)}</div>')
 
+    # Climbing in autocomplete (positions recorded from 2026-W45)
+    climb_html = []
+    for c in cs:
+        if "rank" not in c.df.columns or not c.prev:
+            continue
+        cur, prev = c.rows(c.week).dropna(subset=["rank"]), c.rows(c.prev).dropna(subset=["rank"])
+        if cur.empty or prev.empty:
+            continue
+        m = cur.merge(prev[["seed", "s", "rank"]], on=["seed", "s"], suffixes=("", "_prev"))
+        m = m[m["rank_prev"] - m["rank"] >= 3].sort_values(["rank", "rank_prev"], ascending=[True, False])
+        ex = [f'{s} (#{p:.0f} → #{r:.0f})' for s, p, r in zip(m["s"], m["rank_prev"], m["rank"])]
+        climb_html.append(f'<p><b>{esc(c.name)}</b>: {len(m)} suggestions moved up 3+ places for the same search term. {chips(ex, 10)}</p>')
+    if climb_html:
+        items.append(f'<div class="tb"><h3>Climbing in autocomplete</h3>'
+                     f'<p class="sub">Position in the dropdown (1–10) vs last collection, English results. '
+                     f'A suggestion moving up is a stronger signal than one simply appearing.</p>{"".join(climb_html)}</div>')
+
     # Both cities at once
     if len(cs) == 2 and all(c.prev for c in cs):
         seed_words = set().union(*(tokens(s) for c in cs for s in c.df["seed"].unique()))
@@ -510,7 +530,8 @@ def section_trends(caveats: list) -> str:
         zero = (last12 == 0).sum()
         if zero:
             caveats.append(f"{CITIES[k]['display_name']} Trends: {zero} of {len(last12)} search terms had zero measurable "
-                           f"interest over 12 months (too little search volume in the region) and can't move the scores.")
+                           f"interest over 12 months (too little search volume in the region) and can't move the scores. "
+                           f"From 2026-W45 they're skipped in Trends (still collected for autocomplete) and re-checked every 4th week.")
     caveats.append("Trends: the most recent week is partial (Google marks it as incomplete), so its values can shift next run.")
 
     if not comparable:
@@ -574,6 +595,47 @@ def section_trends(caveats: list) -> str:
             + table_view(["Domain", "Berlin", "New York"],
                          [[g["label"], f'{g["values"].get("berlin", 0):.1f}', f'{g["values"].get("new_york", 0):.1f}'] for g in groups])
             + "</section>")
+
+
+def load_rising(city_key: str) -> pd.DataFrame:
+    p = Path("data") / city_key / "rising_all.csv"
+    return pd.read_csv(p) if p.exists() else pd.DataFrame()
+
+
+def section_rising(week: str, caveats: list) -> str:
+    head = ('<section id="rising"><h2>Google\'s rising searches</h2>'
+            '<p class="sub">Per domain, the searches Google Trends reports as growing fastest over the last 3 months '
+            'within a whole Trends category in each region (Berlin state, New York state). Not limited to our search terms, '
+            'so expect some sports, TV and celebrity searches. % = growth; Breakout = more than +5000%. '
+            '★ = not on the list last week.</p>')
+    blocks = []
+    for k in CITY_KEYS:
+        df = load_rising(k)
+        if df.empty or week not in set(df["week"]):
+            continue
+        earlier = sorted(w for w in df["week"].unique() if w < week)
+        prev = df[df["week"] == earlier[-1]] if earlier else df.iloc[0:0]
+        cur = df[df["week"] == week]
+        rows = []
+        for d in DOMAINS:
+            g = cur[cur["domain"] == d].sort_values("rank")
+            if g.empty:
+                continue
+            seen = set(prev[prev["domain"] == d]["query"].str.lower())
+            cells = "".join(
+                f'<span class="chip">{"★ " if earlier and q.lower() not in seen else ""}{esc(q)} '
+                f'<span class="muted">{"Breakout" if v >= 5000 else f"+{v}%"}</span></span>'
+                for q, v in zip(g["query"].head(10), g["value"].head(10)))
+            rows.append([f"<b>{esc(d)}</b>", esc(g["category"].iloc[0]), cells])
+        missing = [name for d, (_, name) in RISING_CATEGORIES.items() if d not in set(cur["domain"])]
+        if missing:
+            caveats.append(f'{CITIES[k]["display_name"]} rising searches: no data this week for '
+                           + ", ".join(missing) + " (the request failed or was rate-limited).")
+        blocks.append(f'<h3>{esc(CITIES[k]["display_name"])}</h3>'
+                      + table(["Domain", "Trends category", "Rising searches"], rows, "examples"))
+    if not blocks:
+        return head + '<p class="badge warn">No rising-searches data for this week (collected from 2026-W45).</p></section>'
+    return head + "".join(blocks) + "</section>"
 
 
 def noise_caveats(cities: dict, caveats: list):
@@ -668,6 +730,7 @@ def build(week: str) -> str:
         section_berlin_languages(cities),
         section_tidbits(cities),
         section_trends(caveats),
+        section_rising(week, caveats),
     ]
     noise_caveats(cities, caveats)
     body.append('<section id="caveats"><h2>Caveats</h2><ul class="caveats">'
@@ -675,7 +738,7 @@ def build(week: str) -> str:
     generated = datetime.now(timezone.utc).astimezone().strftime("%Y-%m-%d %H:%M")
     nav = "".join(f'<a href="#{i}">{t}</a>' for i, t in [
         ("overview", "Overview"), ("new-gone", "New &amp; gone"), ("languages", "Berlin EN vs DE"),
-        ("tidbits", "Tidbits"), ("trends", "Trends"), ("caveats", "Caveats")])
+        ("tidbits", "Tidbits"), ("trends", "Trends"), ("rising", "Rising searches"), ("caveats", "Caveats")])
     return (f'<!doctype html><html lang="en"><head><meta charset="utf-8">'
             f'<meta name="viewport" content="width=device-width,initial-scale=1">'
             f'<title>City Pulse {esc(week)}</title><style>{CSS}</style></head><body><main>'

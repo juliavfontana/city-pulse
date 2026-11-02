@@ -81,7 +81,11 @@ Outputs per city to `data/<city>/`:
 - `trends_all.csv` — cumulative trends (appended each run)
 - `autocomplete_all.csv` — cumulative autocomplete; every week's suggestions are kept
   (deduplicated only within the same week + language), so you can compare weeks
+- `rising_YYYY-WXX.csv` / `rising_all.csv` — Google Trends rising searches per domain category (from 2026-W45)
 - `run_meta_YYYY-WXX.json` — run metadata
+
+The week label is the ISO week of the most recent Sunday, so the Sunday run and a
+Monday catch-up run get the same label.
 
 ### Step 3: Weekly HTML report
 
@@ -156,6 +160,15 @@ into this folder.
 - **Dry runs** (`--test`) write only `_dryrun` files and never touch the cumulative files.
   `analyze.py` also ignores any non-`google_trends` rows in `trends_all.csv`.
 - **Google Trends** is rate-limited (HTTP 429); the collector backs off and retries.
+  To keep requests down, each distinct search is fetched once (Google treats "Berlin theater"
+  and "Theater Berlin" as the same search), and terms with zero interest in all data so far are
+  skipped except every 4th week. Batches are ordered by past interest so small terms aren't
+  batched with big ones and rounded to 0.
+- **Autocomplete rank**: from 2026-W45 each suggestion's position in the dropdown (1–10) is
+  stored in `rank`; the report flags suggestions that climb 3+ places.
+- **Rising searches**: per domain, Trends' "rising" searches for a whole category in the region
+  (`RISING_CATEGORIES` in `config.py`, last 3 months). Our own seed terms are too small for
+  Trends to return rising searches. Categories include unrelated sports/TV/celebrity searches.
 - **Schedule**: `run_weekly.sh` runs Berlin + New York every Sunday at 19:00 via
   `~/Library/LaunchAgents/org.citypulse.weekly.plist`. Logs go to `logs/`. If the Mac is
   asleep it runs on wake; if it's shut down, that week is skipped.

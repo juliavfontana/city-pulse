@@ -44,6 +44,24 @@ CITIES = {
 TRENDS_ANCHOR = "Duolingo"
 TRENDS_TIMEFRAME = "today 12-m"  # weekly resolution; fewer zero values than daily
 
+# ── Google Trends rising searches ─────────────────────────────────────────────
+# Per domain, the searches Trends reports as rising fastest in a whole Trends
+# category in the city's region (all Food & Drink searches in Berlin, etc.).
+# Our own seed terms are too small for this: none returned rising searches
+# (tested 2026-W44). Categories mix in sports and celebrity searches, and
+# Computers & Electronics is consumer tech rather than the startup scene.
+# Added 2026-W45.
+
+RISING_TIMEFRAME = "today 3-m"
+
+RISING_CATEGORIES = {        # domain: (Trends category id, name)
+    "tech":    (5, "Computers & Electronics"),
+    "culture": (3, "Arts & Entertainment"),
+    "fashion": (68, "Apparel"),
+    "food":    (71, "Food & Drink"),
+    "travel":  (67, "Travel"),
+}
+
 # ── Seed query templates ──────────────────────────────────────────────────────
 # Use {city} as placeholder — replaced at runtime with the city display name.
 
