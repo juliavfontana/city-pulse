@@ -335,8 +335,9 @@ def chips(items: list, n: int = 6) -> str:
 
 # ── Sections ──────────────────────────────────────────────────────────────────
 
-def section_overview(cities: dict, caveats: list) -> str:
+def section_overview(cities: dict, caveats: list, highlights: list) -> str:
     tiles, bullet_rows, tv_rows = [], [], []
+    beyond, within = [], []
     for c in cities.values():
         for hl in c.langs(c.week):
             cur = c.set(c.week, hl)
@@ -367,10 +368,18 @@ def section_overview(cities: dict, caveats: list) -> str:
                 tip = f"{label}: {v:.0f}% new {prev_note}" + (f" · normal weekly {lo:.0f}–{hi:.0f}%" if churn else "")
                 bullet_rows.append({"label": label, "value": v, "lo": lo, "hi": hi, "cls": cls, "tip": tip})
                 tv_rows.append([label, f"{v:.0f}%", f"{lo:.0f}–{hi:.0f}%" if churn else "–", prev_note])
+                if churn and v > hi + 2:
+                    beyond.append(f"{esc(label)}: <b>{v:.0f}%</b> new suggestions, above the normal {lo:.0f}–{hi:.0f}%")
+                elif churn:
+                    within.append(label)
             if gap > 1 and hl == "en":
                 caveats.append(f"{c.name}: the previous collection was {c.prev}, {gap} weeks before {c.week}. "
                                f"\"vs last week\" here spans {gap} weeks, so expect more change than the normal weekly churn.")
 
+    for b in beyond:
+        highlights.append(("Search suggestions", b + ". Something shifted; see New &amp; gone."))
+    if within and not beyond:
+        highlights.append(("Search suggestions", "All series changed within normal weekly churn: no broad shift in what people search."))
     churn_all = [x for c in cities.values() for x in c.normal_churn("en")]
     note = ("Google reshuffles autocomplete constantly. In weeks collected back to back, "
             f"{min(churn_all):.0f}–{max(churn_all):.0f}% of suggestions are new each week with no real change in "
@@ -442,7 +451,7 @@ def section_berlin_languages(cities: dict) -> str:
             f'{table(["Domain", "Only in German", "Only in English", "In both"], rows, "examples")}</section>')
 
 
-def section_tidbits(cities: dict) -> str:
+def section_tidbits(cities: dict, highlights: list) -> str:
     items = []
     cs = list(cities.values())
 
@@ -461,6 +470,9 @@ def section_tidbits(cities: dict) -> str:
             flag |= cur >= 2 and cur > max(prev, june) + 1
         if any("<b>0</b>" not in x for x in cells) or flag:
             seas_rows.append([("★ " if flag else "") + esc(w)] + cells)
+    starred = [r[0][2:] for r in seas_rows if r[0].startswith("★ ")]
+    if starred:
+        highlights.append(("Seasonal", "Rising seasonal words in suggestions: " + ", ".join(f"<b>{w}</b>" for w in starred) + "."))
     if seas_rows:
         prevs = " / ".join(f"{c.name} {c.prev}" for c in cs)
         items.append(f'<div class="tb"><h3>Seasonal words</h3><p class="sub">Suggestions mentioning each word: '
@@ -528,6 +540,10 @@ def section_tidbits(cities: dict) -> str:
         drop = sorted([t for t in set(prev[0]) & set(prev[1])
                        if cur[0].get(t, 0) == 0 and cur[1].get(t, 0) == 0 and prev[0][t] + prev[1][t] >= 3],
                       key=lambda t: -(prev[0][t] + prev[1][t]))
+        if appear or drop:
+            highlights.append(("Both cities", "Moving in both cities at once: "
+                               + "; ".join(x for x in [("appeared " + ", ".join(f"<b>{esc(t)}</b>" for t in appear[:5])) if appear else "",
+                                                      ("dropped " + ", ".join(f"<b>{esc(t)}</b>" for t in drop[:5])) if drop else ""] if x) + "."))
         items.append(f'<div class="tb"><h3>Moving in both cities at once</h3>'
                      f'<p><b>Appeared in both</b> (absent in both last time): {chips(appear, 15)}</p>'
                      f'<p><b>Dropped in both</b> (in both last time, now in neither): {chips(drop, 15)}</p>'
@@ -596,7 +612,7 @@ def pulls_label(city_key: str, week: str) -> str:
     return ", ".join(weeks[-RISING_PULLS:])
 
 
-def section_trends(week: str, caveats: list) -> str:
+def section_trends(week: str, caveats: list, highlights: list) -> str:
     loaded = {}
     for k in CITY_KEYS:
         p = Path("data") / k / "trends_all.csv"
@@ -663,6 +679,16 @@ def section_trends(week: str, caveats: list) -> str:
         return head + (f'<p class="badge warn">No term rose consistently (needs {RISING_MIN_PULLS} of the last '
                        f'{RISING_PULLS} weekly pulls and 13 weeks of anchored data).</p></section>')
 
+    for k in loaded:
+        mine = sorted([r for r in rising if r["city"] == k], key=lambda r: -r["change"])
+        name = CITIES[k]["display_name"]
+        if mine:
+            terms = ", ".join(f'<b>{esc(r["query"])}</b> +{r["change"]:.0f}%' for r in mine[:3])
+            more = f" and {len(mine) - 3} more" if len(mine) > 3 else ""
+            highlights.append(("Google Trends", f"{name}: consistently rising: {terms}{more} "
+                               f"(median change across the last {mine[0]['pulls']} weekly pulls)."))
+        elif trends_pulls(k, week):
+            highlights.append(("Google Trends", f"{name}: no search term rose consistently across the last weekly pulls."))
     rdf = pd.DataFrame(rising).drop_duplicates(["city", "key"])  # a term used in two domains counts once
     top = (rdf.sort_values("change", ascending=False)
            .groupby("city", sort=False).head(6).sort_values("change", ascending=False))
@@ -769,7 +795,7 @@ def shares(df: pd.DataFrame, col: str) -> dict:
     return (100 * df[col].value_counts() / len(df)).to_dict() if len(df) else {}
 
 
-def section_events(week: str, caveats: list) -> str:
+def section_events(week: str, caveats: list, highlights: list) -> str:
     head = ('<section id="events"><h2>Events on Luma</h2>'
             '<p class="sub">Each city\'s Luma Discover feed (official iCal subscription), collected weekly. It is Luma\'s featured slice '
             '(about 50 upcoming events): it reaches about 4 weeks ahead in Berlin but only about a week in New York, so compare '
@@ -800,6 +826,20 @@ def section_events(week: str, caveats: list) -> str:
 
     tech = {k: df[df["tech"]] for k, (df, _) in ev.items()}
     other = {k: df[~df["tech"]] for k, (df, _) in ev.items()}
+
+    for k, (df, weeks) in ev.items():
+        t, o = tech[k], other[k]
+        if len(t) < 5:
+            continue
+        bits = [f"{pct(len(t), len(df))} of featured events are tech / startup"]
+        topic = max(EVENT_TOPICS, key=lambda tp: t["topics"].str.contains(re.escape(tp)).mean())
+        bits.append(f"most often about {esc(topic)} ({100 * t['topics'].str.contains(re.escape(topic)).mean():.0f}%)")
+        h_t = (t["venue_type"] == HIDDEN_VENUE).mean() * 100
+        h_o = (o["venue_type"] == HIDDEN_VENUE).mean() * 100 if len(o) else 0
+        if h_t - h_o >= 15:
+            bits.append(f"<b>{h_t:.0f}%</b> hide the address until approved, vs {h_o:.0f}% of other events")
+        span = f"{len(weeks)} week{'s' if len(weeks) > 1 else ''} of data, {len(t)} tech events"
+        highlights.append(("Events", f"{name[k]}: " + "; ".join(bits) + f" ({span})."))
 
     # Venue types
     vt = {k: shares(tech[k], "venue_type") for k in ev}
@@ -877,10 +917,14 @@ def section_events(week: str, caveats: list) -> str:
                + table(["City", "Recurring venues", "New hosts this week"], rows, "examples"))
 
     for k, (df, _) in ev.items():
-        unk = sorted(set(df.loc[df["venue_type"] == UNKNOWN_VENUE, "location"].str.split(",").str[0]))
-        if unk:
-            caveats.append(f"{name[k]} events: {len(unk)} venues have no venue type yet (add them to venues.csv): "
-                           + ", ".join(f'"{u}"' for u in unk[:10]) + ("…" if len(unk) > 10 else "") + ".")
+        u = df[df["venue_type"] == UNKNOWN_VENUE].assign(place=lambda d: d["location"].str.split(",").str[0].str.strip())
+        u = u.sort_values("place").drop_duplicates("place")
+        if len(u):
+            sug = u["venue_suggestion"].fillna("") if "venue_suggestion" in u else pd.Series("", index=u.index)
+            caveats.append(f"{name[k]} events: {len(u)} venues have no venue type yet (add them to venues.csv; "
+                           "suggestions come from the event text and need checking): "
+                           + ", ".join(f'"{p}"' + (f" (suggested: {g})" if g else "") for p, g in zip(u["place"], sug))
+                           + ".")
     caveats.append("Events: topics and tech / startup tagging come from keywords in titles and descriptions, so expect a few misfiles.")
     return head + "".join(out) + "</section>"
 
@@ -990,6 +1034,8 @@ td{border-bottom:1px solid var(--grid);padding:7px 8px;vertical-align:top;font-v
 .chip{display:inline-block;background:var(--chip);border-radius:6px;padding:1px 7px;margin:2px 4px 2px 0;font-size:12.5px}
 details.tv{margin:2px 0 8px;font-size:13px;color:var(--ink2)}details.tv summary{cursor:pointer}
 .tbs{display:grid;gap:8px}.tb h3{margin-top:12px}
+ul.hl{list-style:none;padding:0;margin:8px 0}ul.hl li{padding:8px 0;border-top:1px solid var(--line);display:flex;gap:12px;flex-wrap:wrap}
+ul.hl li:first-child{border-top:0}.hk{flex:0 0 140px;font-size:12px;text-transform:uppercase;letter-spacing:.04em;color:var(--muted);padding-top:2px}
 .badge{display:inline-block;border-radius:8px;padding:6px 10px;font-size:13.5px;border:1px solid var(--line)}
 .badge.ok::before{content:"✓ ";color:var(--ok);font-weight:700}.badge.warn::before{content:"⚠ ";color:var(--warn);font-weight:700}
 ul.caveats li{margin:4px 0;color:var(--ink2)}
@@ -1009,25 +1055,39 @@ document.querySelectorAll('section table').forEach(t=>{const w=document.createEl
 """
 
 
+def section_summary(highlights: list, caveats: list) -> str:
+    """The week at a glance: only findings that already passed each section's
+    noise checks (churn range, consistency across Trends pulls), in a fixed order."""
+    order = ["Google Trends", "Search suggestions", "Both cities", "Seasonal", "Events"]
+    rows = sorted(highlights, key=lambda h: order.index(h[0]) if h[0] in order else len(order))
+    items = "".join(f'<li><span class="hk">{esc(k)}</span>{v}</li>' for k, v in rows)
+    todo = sum(1 for c in caveats if "add them to" in c or "no venue type yet" in c)
+    foot = (f'<p class="sub">{todo} data to-do{"s" if todo != 1 else ""} (unclassified venues or events), see '
+            f'<a href="#caveats">Caveats</a>.</p>') if todo else ""
+    return (f'<section id="summary"><h2>This week</h2><p class="sub">Only findings that pass the noise checks below. '
+            f'Everything else in this report is detail.</p><ul class="hl">{items}</ul>{foot}</section>')
+
+
 def build(week: str) -> str:
     cities = {k: CityWeeks(k, week) for k in CITY_KEYS}
-    caveats = []
+    caveats, highlights = [], []
     body = [
-        section_overview(cities, caveats),
+        section_overview(cities, caveats, highlights),
         section_new_gone(cities, caveats),
         section_berlin_languages(cities),
-        section_tidbits(cities),
-        section_trends(week, caveats),
+        section_tidbits(cities, highlights),
+        section_trends(week, caveats, highlights),
         section_rising(week, caveats),
         section_builder(week),
-        section_events(week, caveats),
+        section_events(week, caveats, highlights),
     ]
     noise_caveats(cities, caveats)
+    body.insert(0, section_summary(highlights, caveats))
     body.append('<section id="caveats"><h2>Caveats</h2><ul class="caveats">'
                 + "".join(f"<li>{esc(c)}</li>" for c in caveats) + "</ul></section>")
     generated = datetime.now(timezone.utc).astimezone().strftime("%Y-%m-%d %H:%M")
     nav = "".join(f'<a href="#{i}">{t}</a>' for i, t in [
-        ("overview", "Overview"), ("new-gone", "New &amp; gone"), ("languages", "Berlin EN vs DE"),
+        ("summary", "This week"), ("overview", "Overview"), ("new-gone", "New &amp; gone"), ("languages", "Berlin EN vs DE"),
         ("tidbits", "Tidbits"), ("trends", "Trends"), ("rising", "Rising searches"), ("builder", "AI &amp; builder terms"),
         ("events", "Events"), ("caveats", "Caveats")])
     return (f'<!doctype html><html lang="en"><head><meta charset="utf-8">'

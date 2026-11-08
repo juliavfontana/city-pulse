@@ -96,7 +96,8 @@ Monday catch-up run get the same label.
 .venv/bin/python report.py --week 2026-W42
 ```
 
-Writes `reports/weekly_report_<week>.html`: overview with normal-churn context, new/gone per
+Writes `reports/weekly_report_<week>.html`: a "This week" summary at the top (only findings
+that pass the noise checks: beyond normal churn, consistent across Trends pulls), overview with normal-churn context, new/gone per
 domain, Berlin English vs German, auto-flagged tidbits, anchored Trends charts, rising searches,
 AI & builder terms, Luma events and caveats.
 Generated automatically by `run_weekly.sh` after the Sunday collection.
@@ -182,8 +183,11 @@ into this folder.
   ahead in Berlin, ~1 week in New York, so compare shares, not counts). Events are tagged with topics
   (`EVENT_TOPICS`), venue type (`venues.csv`, then keyword rules in `VENUE_TYPES`), area and time of
   day. "Address hidden" = the venue is only shown after the host approves the registration. The
-  report lists venues without a type; add them to `venues.csv` (by venue name, or street address
-  when unnamed). `events_all.csv` keeps one row per event with the weeks it was first/last seen.
+  report lists venues without a type, with a suggested type guessed from the event's own text (check
+  it before using it); add them to `venues.csv` (by venue name, or street address when unnamed). The
+  weekly run prints paste-ready `city,venue,type` lines in the log. Each run re-tags stored events, and
+  `.venv/bin/python events.py --retag` applies edits to `venues.csv` or the topic rules right away
+  (no fetching). `events_all.csv` keeps one row per event with the weeks it was first/last seen.
 - **Hidden addresses**: when a host hides the address until approval, it stays "Address hidden"
   (that gating is itself a signal), and is never looked up elsewhere. If the host's own title or
   description describes the place ("a loft in SoHo", "Venue: The Delta Campus"), the snippet is kept

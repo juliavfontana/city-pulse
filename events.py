@@ -132,6 +132,18 @@ def venue_type(city: str, location: str, venue: str, known: dict) -> str:
     return UNKNOWN_VENUE
 
 
+def suggest_venue_type(title: str, description: str) -> str:
+    """For an unclassified venue, a guess from the event's own text (the venue
+    rules applied to title + description). Shown as a suggestion only; nothing is
+    classified until it's added to venues.csv."""
+    body = "\n".join(l for l in description.split("\n") if not l.startswith("Get up-to-date information"))
+    low = f"{title} {body[:600]}".lower()
+    for name, rx in VENUE_TYPES:
+        if name != "Online" and re.search(rx, low):
+            return name
+    return ""
+
+
 def venue_hint(title: str, description: str) -> str:
     """Up to two snippets where the host's own public text describes the venue."""
     body = "\n".join(l for l in description.split("\n")
@@ -190,6 +202,10 @@ def tag(df: pd.DataFrame, city: str) -> pd.DataFrame:
     df.loc[hidden, "venue_hint"] = [venue_hint(a, b) for a, b in zip(df.loc[hidden, "title"], df.loc[hidden, "description"])]
     described = load_event_venues()
     df["described_type"] = [described.get(u, "") if h else "" for u, h in zip(df["uid"], hidden)]
+    unknown = df["venue_type"] == UNKNOWN_VENUE
+    df["venue_suggestion"] = ""
+    df.loc[unknown, "venue_suggestion"] = [suggest_venue_type(a, b) for a, b in
+                                           zip(df.loc[unknown, "title"], df.loc[unknown, "description"])]
     df["area"] = df["location"].map(lambda l: area(city, l))
     local = df["start"].dt.tz_convert(tz)
     df["slot"] = local.map(slot)
@@ -210,6 +226,19 @@ def collect_events(city: str) -> pd.DataFrame:
     return tag(df, city)
 
 
+def retag(df: pd.DataFrame, city: str) -> pd.DataFrame:
+    """Re-applies tag() to stored events, so changes to venues.csv,
+    data/event_venues.csv or the topic rules reach events already collected."""
+    if df.empty:
+        return df
+    df = df.copy()
+    for col in ["title", "description", "location"]:
+        df[col] = df[col].fillna("")
+    for col in ["start", "end"]:
+        df[col] = pd.to_datetime(df[col], utc=True)
+    return tag(df, city)
+
+
 def save(city: str, df: pd.DataFrame, week: str):
     data_dir = Path("data") / city
     data_dir.mkdir(parents=True, exist_ok=True)
@@ -219,7 +248,7 @@ def save(city: str, df: pd.DataFrame, week: str):
     path = data_dir / "events_all.csv"
     df = df.assign(first_seen=week, last_seen=week)
     if path.exists():
-        old = pd.read_csv(path)
+        old = retag(pd.read_csv(path), city)
         first = dict(zip(old["uid"], old["first_seen"]))
         df["first_seen"] = df["uid"].map(first).fillna(week)
         df = pd.concat([old[~old["uid"].isin(df["uid"])], df], ignore_index=True)
@@ -229,7 +258,20 @@ def save(city: str, df: pd.DataFrame, week: str):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--city", choices=list(LUMA_FEEDS), help="One city (default: all)")
+    parser.add_argument("--retag", action="store_true",
+                        help="Re-tag stored events (after editing venues.csv or topic rules); no fetching")
     args = parser.parse_args()
+
+    if args.retag:
+        for city in [args.city] if args.city else LUMA_FEEDS:
+            for path in sorted((Path("data") / city).glob("events_*.csv")):
+                old = pd.read_csv(path)
+                new = retag(old, city)
+                new.to_csv(path, index=False)
+                changed = (old["venue_type"].fillna("") != new["venue_type"]).sum() if "venue_type" in old else len(new)
+                retopic = (old["tech"] != new["tech"]).sum() if "tech" in old else 0
+                print(f"[Events] Re-tagged {path}: {changed} venue types changed, {retopic} tech/startup flags changed")
+        return
 
     week = current_week()
     for city in [args.city] if args.city else LUMA_FEEDS:
@@ -243,9 +285,12 @@ def main():
         print(f"[Events] {name}: {len(df)} events ({df['start'].min():%b %d} → {df['start'].max():%b %d}), "
               f"{len(t)} tech/startup → data/{city}/events_{week}.csv")
         print("  Venue types (tech): " + ", ".join(f"{k} {v}" for k, v in t["venue_type"].value_counts().items()))
-        unknown = sorted(set(df.loc[df["venue_type"] == UNKNOWN_VENUE, "location"].str[:60]))
-        if unknown:
-            print(f"  Unclassified venues (add to venues.csv): {unknown}")
+        unknown = df[df["venue_type"] == UNKNOWN_VENUE].drop_duplicates("location")
+        if len(unknown):
+            print(f"  {len(unknown)} unclassified venues. Check, then paste into venues.csv (city,venue,type):")
+            for r in unknown.itertuples():
+                key = r.venue or r.location.split(",")[0].strip()
+                print(f"    {city},{key},{r.venue_suggestion or '?'}")
 
 
 if __name__ == "__main__":

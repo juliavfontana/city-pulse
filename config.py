@@ -355,16 +355,16 @@ LUMA_FEEDS = {
 
 # Topic tags from title + start of description (an event can have several).
 EVENT_TOPICS = {
-    "AI agents":             r"\bagent(s|ic)?\b|\bmcp\b|claude code|codex|harness",
+    "AI agents":             r"\bagent(s|ic)?\b|\bmcp\b|claude code|codex|(agent|ai|eval) harness",
     "AI / LLMs":             r"\bai\b|\bllms?\b|\bgpt\b|genai|\bki\b|machine learning|artificial intelligence|openai|anthropic|claude|gemini",
     "Builders & hackathons": r"vibe cod|hackathon|\bhack\b|builders?\b|demo ?(day|night)|\bdemos\b|demo or it|show & tell|show and tell|hack night",
-    "Founders & investors":  r"founder|startup|start-up|gründer|\bvcs?\b|investor|angel|pitch|fundrais|pre-seed|accelerator|incubator|unicorn",
+    "Founders & investors":  r"founder|startup|start-up|gründer|\bvcs?\b|investor|angel invest|business angels?|angel round|pitch|fundrais|pre-seed|accelerator|incubator|unicorn",
     "Robotics & hardware":   r"robot|hardware|physical ai|drone|deep ?tech|semiconductor|\bcompute\b",
     "Science & research":    r"science|research|\bphd\b|scientist",
     "Health & bio":          r"health ?tech|biotech|\bbio\b|medtech|pharma",
     "Climate & energy":      r"climate|energy|cleantech|carbon",
-    "Crypto / web3":         r"crypto|web3|blockchain|solana|ethereum|bitcoin|defi",
-    "AI safety & policy":    r"ai safety|alignment|ai act|ai policy|ai governance|ai ethics|security",
+    "Crypto / web3":         r"crypto|web3|blockchain|solana|ethereum|bitcoin|\bdefi\b",
+    "AI safety & policy":    r"ai safety|ai alignment|alignment (research|hackathon|security)|ai act|ai policy|ai governance|ai ethics|security",
     "Fintech":               r"fintech|payments",
 }
 # An event counts as tech / startup if it has any of these
