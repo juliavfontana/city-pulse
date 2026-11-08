@@ -150,6 +150,11 @@ into this folder.
   over 12 months. Caveat: this makes cities comparable *relative to the anchor's
   local popularity*, not in absolute search volume, which Trends never exposes.
   Only `google_trends_anchored` rows are analyzed; older rows stay in the file.
+- **Rising terms are checked across pulls**: every run re-fetches 12 months, and
+  Trends revises past weeks each time (in Berlin by ~10% typically, 200%+ for small
+  terms flipping between 0 and a few points; New York ~3%). So the report only
+  lists a term as rising (last 4 weeks vs the 8 before) if it rises in at least 3
+  of the last 4 weekly pulls (`trends_<week>.csv`), ranked by median change.
 - **Seed overrides**: short templates that get hijacked in one city (e.g.
   "founders New York" → NY Giants / NY Times) are swapped per city via
   `SEED_OVERRIDES` in `config.py`, without changing other cities' seeds.

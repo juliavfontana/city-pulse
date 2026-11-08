@@ -536,7 +536,67 @@ def section_tidbits(cities: dict) -> str:
     return f'<section id="tidbits"><h2>Tidbits</h2><div class="tbs">{"".join(items)}</div></section>'
 
 
-def section_trends(caveats: list) -> str:
+RISING_PULLS = 4      # weekly Trends pulls a rising term is checked against
+RISING_MIN_PULLS = 3  # ...and must be rising in (the newest included)
+
+
+def query_key(q: str) -> str:
+    """Google treats word order and case as the same search ("Berlin theater" =
+    "Theater Berlin"), so those are merged."""
+    return " ".join(sorted(tokens(q)))
+
+
+def rising_scores(df: pd.DataFrame, recent_only: bool = False) -> dict:
+    """Per (query key, domain): last 4 complete weeks vs the 8 weeks before, as %
+    of the term's own level, so big and small terms (and cities) compete fairly.
+    The newest week is partial and left out. Terms whose baseline is under 1
+    (vs the anchor) are skipped. recent_only=True returns just the recent level
+    of every term with measurable interest."""
+    dates = sorted(df["date"].unique())
+    if len(dates) < 14:
+        return {}
+    recent_d, base_d = dates[-5:-1], dates[-13:-5]
+    out = {}
+    for (key, domain), g in df.assign(key=df["query"].map(query_key)).groupby(["key", "domain"]):
+        by_date = g.groupby("date")["relative_interest"].mean()
+        recent, base = by_date.reindex(recent_d).mean(), by_date.reindex(base_d).mean()
+        if recent_only:
+            if recent > 0:
+                out[(key, domain)] = recent
+        elif not pd.isna(base) and base >= 1:
+            out[(key, domain)] = {"key": key, "query": g["query"].iloc[0], "domain": domain, "recent": recent,
+                                  "base": base, "change": 100 * (recent / base - 1)}
+    return out
+
+
+def pull_files(city_key: str, week: str) -> list:
+    """(week, path) of each weekly Trends pull up to `week`, newest last, at most
+    RISING_PULLS. The 2026-W42 run was re-fetched with the anchor into a separate
+    _anchored file, which is preferred."""
+    files = {}
+    for p in sorted((Path("data") / city_key).glob("trends_20??-W??*.csv")):
+        m = re.fullmatch(r"trends_(\d{4}-W\d\d)(_anchored)?\.csv", p.name)
+        if m and m.group(1) <= week and (m.group(2) or m.group(1) not in files):
+            files[m.group(1)] = p
+    return sorted(files.items())
+
+
+def trends_pulls(city_key: str, week: str) -> list:
+    pulls = []
+    for _, p in pull_files(city_key, week):
+        df = load_trends(p) if p.stat().st_size > 1 else pd.DataFrame()
+        if not df.empty:
+            pulls.append(df[df["domain"].isin(DOMAINS)])
+    return pulls[-RISING_PULLS:]
+
+
+def pulls_label(city_key: str, week: str) -> str:
+    weeks = [w for w, p in pull_files(city_key, week)
+             if p.stat().st_size > 1 and not load_trends(p).empty]
+    return ", ".join(weeks[-RISING_PULLS:])
+
+
+def section_trends(week: str, caveats: list) -> str:
     loaded = {}
     for k in CITY_KEYS:
         p = Path("data") / k / "trends_all.csv"
@@ -570,40 +630,48 @@ def section_trends(caveats: list) -> str:
     series = [("berlin", "Berlin", "c-berlin"), ("new_york", "New York", "c-ny")]
     cls = {"berlin": "c-berlin", "new_york": "c-ny"}
 
-    # Rising = last 4 complete weeks vs the 8 weeks before, as % of the term's own
-    # level, so big and small terms (and cities) compete fairly. The newest week
-    # is partial and left out. Google treats word order and case as the same
-    # search ("Berlin theater" = "Theater Berlin"), so those are merged.
-    rising, groups_raw = [], {d: {} for d in DOMAINS}
+    # Domain averages come from the cumulative file (newest values per week).
+    groups_raw = {d: {} for d in DOMAINS}
     for k, df in loaded.items():
-        dates = sorted(df["date"].unique())
-        if len(dates) < 14:
-            continue
-        recent_d, base_d = dates[-5:-1], dates[-13:-5]
-        df = df.assign(key=df["query"].map(lambda q: " ".join(sorted(tokens(q)))))
-        seen = set()
-        for (key, domain), g in df.groupby(["key", "domain"]):
-            by_date = g.groupby("date")["relative_interest"].mean()
-            recent = by_date.reindex(recent_d).mean()
-            base = by_date.reindex(base_d).mean()
-            if recent > 0:
-                groups_raw[domain].setdefault(k, []).append(recent)
-            if key in seen or pd.isna(base) or base < 1:
-                continue
-            seen.add(key)
-            rising.append({"city": k, "query": g["query"].iloc[0], "domain": domain,
-                           "recent": recent, "base": base, "change": 100 * (recent / base - 1)})
-    if not rising:
-        return head + '<p class="badge warn">Not enough weeks of anchored data yet (needs 13).</p></section>'
+        for (key, domain), recent in rising_scores(df, recent_only=True).items():
+            groups_raw[domain].setdefault(k, []).append(recent)
 
-    rdf = pd.DataFrame(rising)
-    top = (rdf[rdf["change"] > 0].sort_values("change", ascending=False)
+    # Rising terms must hold up across weekly pulls. Trends re-sends all 12 months
+    # every run and its values for the same past week shift between pulls (in
+    # Berlin by 10% typically, 200%+ for small terms that flip between 0 and a
+    # few points), so a single pull can show +500% from a baseline that was 0 the
+    # week before. A term counts as rising only if it rises in at least
+    # RISING_MIN_PULLS of the last RISING_PULLS pulls, including the newest, and
+    # it's ranked by its median change across those pulls.
+    rising = []
+    for k in loaded:
+        pulls = trends_pulls(k, week)
+        if len(pulls) < RISING_MIN_PULLS:
+            continue
+        scores = [rising_scores(p) for p in pulls]
+        latest = scores[-1]
+        for key, r in latest.items():
+            changes = [s[key]["change"] for s in scores if key in s]
+            up = [c for c in changes if c > 0]
+            if r["change"] <= 0 or len(up) < RISING_MIN_PULLS:
+                continue
+            rising.append({**r, "city": k, "change": float(pd.Series(changes).median()),
+                           "lo": min(changes), "hi": max(changes), "up": len(up), "pulls": len(scores)})
+        caveats.append(f"{CITIES[k]['display_name']} Trends: rising terms checked across {len(scores)} weekly pulls "
+                       f"({pulls_label(k, week)}).")
+    if not rising:
+        return head + (f'<p class="badge warn">No term rose consistently (needs {RISING_MIN_PULLS} of the last '
+                       f'{RISING_PULLS} weekly pulls and 13 weeks of anchored data).</p></section>')
+
+    rdf = pd.DataFrame(rising).drop_duplicates(["city", "key"])  # a term used in two domains counts once
+    top = (rdf.sort_values("change", ascending=False)
            .groupby("city", sort=False).head(6).sort_values("change", ascending=False))
-    counts = "; ".join(f'{CITIES[k]["display_name"]}: {(g["change"] > 0).sum()} of {len(g)} terms rising'
-                       for k, g in rdf.groupby("city", sort=False))
+    counts = "; ".join(f'{CITIES[k]["display_name"]}: {(rdf["city"] == k).sum()} rising consistently'
+                       for k in loaded)
     top_rows = [{"label": f'{r["query"]} ({r["domain"]})', "value": r["change"], "cls": cls[r["city"]],
-                 "tip": f'{CITIES[r["city"]]["display_name"]} · {r["query"]}: +{r["change"]:.0f}% '
-                        f'({r["base"]:.1f} → {r["recent"]:.1f} vs {anchor})'} for _, r in top.iterrows()]
+                 "tip": f'{CITIES[r["city"]]["display_name"]} · {r["query"]}: +{r["change"]:.0f}% median, '
+                        f'{r["lo"]:+.0f}% to {r["hi"]:+.0f}% across pulls '
+                        f'(now {r["base"]:.1f} → {r["recent"]:.1f} vs {anchor})'} for _, r in top.iterrows()]
 
     groups = [{"label": d, "values": {k: sum(v) / len(v) for k, v in groups_raw[d].items()}} for d in DOMAINS]
 
@@ -612,10 +680,13 @@ def section_trends(caveats: list) -> str:
             '<p class="sub">This compares each city relative to how much people there search for the anchor term, '
             'not absolute search volume (which Trends never reveals).</p>'
             f'<h3>Fastest-rising search terms (top 6 per city)</h3>'
-            f'<p class="sub">Last 4 complete weeks vs the 8 weeks before, as % change. Terms with almost no volume are left out. {esc(counts)}.</p>'
+            f'<p class="sub">Last 4 complete weeks vs the 8 weeks before, as % change. Trends revises past weeks every '
+            f'time it\'s fetched, so only terms rising in at least {RISING_MIN_PULLS} of the last {RISING_PULLS} weekly '
+            f'pulls are shown, ranked by their median change. {esc(counts)}.</p>'
             f'{legend(series)}{hbars(top_rows, unit="%")}'
-            + table_view(["City", "Term", "Domain", "Change", "Before → now (vs anchor)"],
+            + table_view(["City", "Term", "Domain", "Median change", "Range across pulls", "Rising in", "Before → now (vs anchor)"],
                          [[CITIES[r["city"]]["display_name"], r["query"], r["domain"], f'+{r["change"]:.0f}%',
+                           f'{r["lo"]:+.0f}% to {r["hi"]:+.0f}%', f'{r["up"]} of {r["pulls"]} pulls',
                            f'{r["base"]:.1f} → {r["recent"]:.1f}'] for _, r in top.iterrows()])
             + f'<h3>Average interest per domain, relative to "{esc(anchor)}" (last 4 complete weeks)</h3>'
             f'<p class="sub">100 = searched as much as the anchor term in that city. Averages terms with measurable interest.</p>'
@@ -946,7 +1017,7 @@ def build(week: str) -> str:
         section_new_gone(cities, caveats),
         section_berlin_languages(cities),
         section_tidbits(cities),
-        section_trends(caveats),
+        section_trends(week, caveats),
         section_rising(week, caveats),
         section_builder(week),
         section_events(week, caveats),
